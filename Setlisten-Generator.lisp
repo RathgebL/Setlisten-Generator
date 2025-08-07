@@ -130,6 +130,71 @@
       (and (>= t2 (- t1 5))
            (<= t2 (+ t1 30)))))
 
+(defun optimize-cluster (songs)
+  "Optimiert eine Gruppe von Songs bzgl. Embouchure & Tonart."
+  (let* ((shuffled (shuffle-list (copy-list songs)))
+         (sax-songs (remove-if-not (lambda (s) (= (song-sax s) 1)) shuffled))
+         (non-sax-songs (remove-if (lambda (s) (= (song-sax s) 1)) shuffled))
+         (result '())
+         (used '()))
+
+    (when non-sax-songs
+      (push (first non-sax-songs) result)
+      (push (first non-sax-songs) used))
+
+    (dolist (song (rest non-sax-songs))
+      (let* ((last-song (car (last result)))
+             (same-key (string= (song-key song) (song-key last-song)))
+             (emb1? (= (song-embouchure song) 1))
+             (emb-prev1? (= (song-embouchure last-song) 1)))
+
+        (cond
+         ((or same-key (and emb1? emb-prev1?))
+          (let ((alt (find-if (lambda (alt)
+                                (and (not (member alt used))
+                                     (not (string= (song-key alt) (song-key last-song)))
+                                     (not (and (= (song-embouchure alt) 1)
+                                               (= (song-embouchure last-song) 1)))))
+                              non-sax-songs)))
+            (if alt
+                (progn (push alt result) (push alt used))
+              (progn (push song result) (push song used)))))
+         (t
+          (push song result)
+          (push song used)))))
+
+    ;; Embouchure-1-Songs verteilen
+    (let* ((emb1-songs (remove-if-not (lambda (s) (= (song-embouchure s) 1)) result))
+           (non-emb1 (remove-if (lambda (s) (= (song-embouchure s) 1)) result)))
+      (setf result non-emb1)
+      (when emb1-songs
+        (let* ((n (length non-emb1))
+               (k (length emb1-songs))
+               (spacing (max 1 (floor n (1+ k))))
+               (positions (loop for i from spacing by spacing
+                                repeat k
+                                collect (min i (length result)))))
+          (loop for s in emb1-songs
+                for i in positions
+                do (setf result
+                         (append (subseq result 0 i)
+                                 (list s)
+                                 (subseq result i)))))))
+
+    ;; Sax-Songs einfügen (sortiert nach Tempo)
+    (let* ((sax-sorted (sort sax-songs #'< :key #'song-tempo))
+           (insert-pos (truncate (/ (length result) 2))))
+      (loop for s in sax-sorted
+            for i from 0
+            do (setf result
+                     (append (subseq result 0 (+ insert-pos i))
+                             (list s)
+                             (subseq result (+ insert-pos i))))))
+
+    ;; Doppelte vermeiden
+    (remove-duplicates result :key #'song-title :test #'string=)))
+
+
 
 ;;; Hauptfunktion
 (defun arrange-songs-with-full-rules (songs &key (embouchure-mode 1))
@@ -137,173 +202,35 @@
   (let* ((sorted-songs (sort (copy-list songs) #'< :key #'song-position))
          (first-song (first sorted-songs))
          (last-song (car (last sorted-songs)))
-         (middle-songs (remove first-song (remove last-song sorted-songs)))
+         (middle-songs (remove first-song (remove last-song sorted-songs))))
 
-         ;; Zweiter Song
-         (second-candidate
-          (find-if (lambda (s)
-                     (and (not (string= (song-key s) (song-key first-song)))
-                          (= (song-melody-instruments s) 2)
-                          (< (song-tempo s) 150)))
-                   middle-songs))
+    ;; Cluster nach Tempo definieren
+    (let* ((clusters (list
+                      (remove-if-not (lambda (s) (< (song-tempo s) 100)) middle-songs)
+                      (remove-if-not (lambda (s) (and (>= (song-tempo s) 100) (< (song-tempo s) 140))) middle-songs)
+                      (remove-if-not (lambda (s) (and (>= (song-tempo s) 140) (< (song-tempo s) 180))) middle-songs)
+                      (remove-if-not (lambda (s) (and (>= (song-tempo s) 180) (< (song-tempo s) 220))) middle-songs)
+                      (remove-if-not (lambda (s) (>= (song-tempo s) 220)) middle-songs)))
+           (flattened-clusters '()))
 
-         (remaining-after-second
-          (if second-candidate
-              (remove second-candidate middle-songs :count 1)
-              middle-songs))
+      ;; Lokale Optimierung pro Cluster
+      (dolist (cluster clusters)
+        (let ((opt-cluster (remove nil (optimize-cluster cluster))))
+          (setf flattened-clusters (append flattened-clusters opt-cluster))))
 
-         ;; Vorletzter Song
-         (tempo-last (song-tempo last-song))
-         (penultimate-candidate
-          (find-if (lambda (s)
-                     (let ((tempo (song-tempo s)))
-                       (and (not (string= (song-key s) (song-key last-song)))
-                            (>= tempo (- tempo-last 30))
-                            (<= tempo (- tempo-last 10))
-                            (= (song-melody-instruments s) 2))))
-                   remaining-after-second))
-
-         (middle-candidates
-          (if penultimate-candidate
-              (remove penultimate-candidate remaining-after-second :count 1)
-              remaining-after-second)))
-
-    ;; Innere Optimierung
-    (labels
-        ((optimize-middle-songs (songs)
-           (let* ((shuffled (shuffle-list (copy-list songs)))
-                  (sax-songs (remove-if-not (lambda (s) (= (song-sax s) 1)) shuffled))
-                  (non-sax-songs (remove-if     (lambda (s) (= (song-sax s) 1)) shuffled))
-                  (sorted (copy-list non-sax-songs))
-                  (result '())
-                  (used '()))
-
-             ;; Füge ersten Song ein, wenn vorhanden
-             (when sorted
-               (push (first sorted) result)
-               (push (first sorted) used))
-
-             ;; Regeln anwenden
-             (dolist (song (rest sorted))
-               (let* ((last-song (car (last result)))
-                      (same-key (string= (song-key song) (song-key last-song)))
-                      (emb1? (= (song-embouchure song) 1))
-                      (emb-prev1? (= (song-embouchure last-song) 1))
-                      (tempo-last (song-tempo last-song))
-                      (tempo (song-tempo song))
-                      (tempo-ok
-                       (tempo-compatible-p tempo-last tempo)))
-
-                 (cond
-                  ;; Regelverletzung -> Alternativsong suchen                  
-                  ((or same-key (and emb1? emb-prev1?) (not tempo-ok))
-                   ; debug (format t "~%Type of sorted: ~a~%" (type-of sorted))
-                   (let ((alt
-                          (find-if
-                           (lambda (alt)
-                             (and (not (member alt used))
-                                  (not (string= (song-key alt) (song-key last-song)))
-                                  (not (and (= (song-embouchure alt) 1)
-                                            (= (song-embouchure last-song) 1)))
-                                  ;; Temporegel einbauen
-                                  (let ((tempo-alt (song-tempo alt)))
-                                    (tempo-compatible-p tempo-last tempo-alt))))
-
-                           sorted)))
-                         (if alt
-                             (progn
-                               (push alt result)
-                               (push alt used))
-                           (progn
-                             ;(format t "~%DEBUG (fallback): type of sorted is ~A~%" (type-of sorted))
-                             (let* ((filtered
-                                     (remove-if-not
-                                      (lambda (alt)
-                                        (and (not (member alt used))
-                                             (not (string= (song-key alt) (song-key last-song)))
-                                             (not (and (= (song-embouchure alt) 1)
-                                                       (= (song-embouchure last-song) 1)))))
-                                      sorted))
-                                    ;(_ (format t "~%DEBUG: filtered is a list? ~A~%" (listp filtered)))
-                                    (fallback (car (sort filtered #'< :key #'song-tempo))))
-                               (if fallback
-                                   (progn
-                                     (push fallback result)
-                                     (push fallback used))
-                                 (if (tempo-compatible-p tempo-last (song-tempo song))
-                                     (progn
-                                       (push song result)
-                                       (push song used))
-                                   (format t "~%KEIN passender Song gefunden, Tempo-Verstoß bei ~A (~A -> ~A)~%"
-                                           (song-title song) tempo-last (song-tempo song)))))))))
-                   ;; sonst einfach einfügen
-                   (t
-                    (push song result)
-                    (push song used)))))
-
-
-             (setf result (nreverse result))
-
-             ;; Embouchure-1-Songs gezielt mit Abstand verteilen
-             (let* ((emb1-songs (remove-if-not (lambda (s) (= (song-embouchure s) 1)) result))
-                    (non-emb1 (remove-if (lambda (s) (= (song-embouchure s) 1)) result)))
-               (setf result non-emb1)
-               (when emb1-songs
-                 (let* ((n (length non-emb1))
-                        (k (length emb1-songs))
-                        (spacing (max 1 (floor n (1+ k))))
-                        (positions (loop for i from spacing by spacing
-                                         repeat k
-                                         collect (min i (length result)))))
-                   (loop for s in emb1-songs
-                         for i in positions
-                         do (setf result
-                                  (append (subseq result 0 i)
-                                          (list s)
-                                          (subseq result i)))))))
-
-             ;; Sax-Songs einfügen (sortiert nach Tempo)
-             (let* ((sax-sorted (sort sax-songs #'< :key #'song-tempo))
-                    (insert-pos (truncate (/ (length result) 2))))
-               (loop for s in sax-sorted
-                     for i from 0
-                     do (setf result
-                              (append (subseq result 0 (+ insert-pos i))
-                                      (list s)
-                                      (subseq result (+ insert-pos i))))))
-
-             ;; Fehlende Songs (z.B. durch Logikfehler) am Ende hinzufügen
-             (let* ((result-titles (mapcar #'song-title result)) ;; Extrahiere Titel der bisherigen Songs
-                    ;; Finde Songs, deren Titel nicht in 'result' auftauchen
-                    (missing (remove-if (lambda (s)
-                                          (member (song-title s) result-titles :test #'string=))
-                                        songs)))
-               ;; Wenn welche fehlen, gib Warnung aus und hänge sie ans Ende
-               (when missing
-                 (format t "~%WARNUNG: Songs ergänzt: ~a~%" (mapcar #'song-title missing))
-                 (dolist (song missing)
-                   (setf result (insert-song-with-rules song result)))))
-
-             ;; Doppelte entfernen, nur zur Sicherheit
-             (setf result (remove-duplicates result :key #'song-title :test #'string=))
-
-             result)))
-
-      ;; Finale Songliste
+      ;; Songliste zusammenbauen
       (let ((final-order
              (remove nil
                      (append (list first-song)
-                             (when second-candidate (list second-candidate))
-                             (optimize-middle-songs middle-candidates)
-                             (when penultimate-candidate (list penultimate-candidate))
+                             flattened-clusters
                              (list last-song)))))
 
-        ;; Neue Positionen setzen
+        ;; Positionen setzen
         (loop for s in final-order
-      for i from 1
-      do (setf (song-position s) i))
+              for i from 1
+              do (setf (song-position s) i))
 
-        ;; Tempo-Regel-Überprüfung
+        ;; Tempo-Check
         (loop for (s1 s2) on final-order while s2
               do (let ((t1 (song-tempo s1))
                        (t2 (song-tempo s2)))
@@ -311,6 +238,7 @@
                      (format t "~%WARNUNG: Tempo-Regel verletzt zwischen ~A (~A) und ~A (~A)~%"
                              (song-title s1) t1
                              (song-title s2) t2))))
+
         final-order))))
 
 
