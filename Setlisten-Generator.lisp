@@ -1,9 +1,11 @@
 ;;;; ----- SETLISTEN GENERATOR -----
 
+;; Version: v1.0 (Stand: 2025-08-07)
+
 #|
 
 Beschreibung:
-Mit dem Setlisten-Generator kann aus einer CSV-Liste von Songs automatisch eine musikalisch und spielerisch sinnvolle Konzertreihenfolge erstellt werden. Das Ergebnis wird übersichtlich ausgegeben und als CSV-Datei exportiert. Die Songs werden dabei nach folgenden Regeln sortiert.
+Mit dem Setlisten-Generator kann aus einer CSV-Liste von Songs automatisch eine musikalisch und spielerisch sinnvolle Konzertreihenfolge erstellt werden. Das Ergebnis wird uebersichtlich ausgegeben und als CSV-Datei exportiert. Die Songs werden dabei nach folgenden Regeln sortiert.
 
 Regeln:
 Erster und letzter Song: behalten ihrere vorgegeben Positionen
@@ -11,9 +13,10 @@ Zweiter Song: =/= Tonart wie erster Song, Tempo 121-140 und 2 Melodieinstrumente
 Dritter Song: =/= Tonart wie zweiter Song, Tempo 141-160 und 2 Melodieinstrumente  
 Mittlere Songs: Songs in Tempo-Clustern sortiert
                 Zirkulation durch die verschiedenen Cluster
-                Songs mit Sax-Wert = 1 zusammen und mittig
+                Songs mit Sax-Wert = 1 zusammen (und mittig)
                 Ansatzwert = 1 nicht hintereinander
-                optimaler Weise keinen gleichen Tonarten hintereinander 
+                keine Soli am Stueck (ausser Altsax)
+                optimaler Weise keine gleichen Tonarten hintereinander 
 Vorletzter Song: =/= Tonart wie letzter Song, Tempo 10-30 weniger als letzter Song und 2 Melodieinstrumente
 
 Nutzung:
@@ -24,7 +27,6 @@ Pfad fuer CSV-Export eingeben
 Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalten
 
 |#
-
 
 ;;; Packete laden
 (load (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname)))
@@ -40,6 +42,7 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
   key
   embouchure
   sax
+  solo
   position)
 
 (defun parse-instruments (field)
@@ -53,7 +56,7 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
             (mapcar (lambda (row)
                       (format t "Zeile gelesen: ~a~%" row)
                       (handler-case
-                          (destructuring-bind (title melody-count tempo key embouchure sax position) row
+                          (destructuring-bind (title melody-count tempo key embouchure sax solo position) row
                             (make-song
                              :title title
                              :melody-instruments (parse-integer melody-count)
@@ -61,6 +64,7 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
                              :key key
                              :embouchure (parse-integer embouchure)
                              :sax (parse-integer sax)
+                             :solo (parse-integer solo)
                              :position (parse-integer position)))
                         (error (e)
                           (format t "Fehler beim Verarbeiten von Zeile: ~a~%Fehler: ~a~%" row e)
@@ -74,7 +78,7 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
     (coerce vec 'list)))
 
 (defun insert-song-with-rules (song result)
-;; Regelkonformes Einfügen nach folgender Priorität:
+;; Regelkonformes Einfuegen nach folgender Prioritaet:
 ;; 1. Kein Ansatz=1 nebeneinander UND keine gleiche Tonart UND Tempo-Regel eingehalten
 ;; 2. Kein Ansatz=1 nebeneinander UND Tempo-Regel eingehalten
 ;; 3. Notloesung: ans Ende
@@ -146,12 +150,12 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
          (result '())
          (used '()))
 
-    ;; Lässt Alt-Sax-Songs aussen vor
+    ;; Laesst Alt-Sax-Songs aussen vor
     (when non-sax-songs
       (push (first non-sax-songs) result)
       (push (first non-sax-songs) used))
 
-    ;; Songs unter Regelbeachtung einfügen
+    ;; Songs unter Regelbeachtung einfuegen
     (dolist (song (rest non-sax-songs))
       (let* ((last-song (car (last result)))
              (same-key (string= (song-key song) (song-key last-song)))
@@ -203,7 +207,6 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
 
     ;; Doppelte vermeiden
     (remove-duplicates result :key #'song-title :test #'string=)))
-
 
 
 ;;; Hauptfunktion
@@ -323,10 +326,21 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
                     (song (find-if
                            (lambda (s)
                              (let ((prev last-inserted))
-                               (and (not (string= (song-key s) (song-key prev)))
-                                    (not (and (= (song-embouchure s) 1)
-                                              (= (song-embouchure prev) 1))))))
+                               (and
+                                ;; Keine gleichen Tonart hintereinander
+                                (not (string= (song-key s) (song-key prev)))
+
+                                ;; Achte auf den Ansatz
+                                (not (and (= (song-embouchure s) 1)
+                                          (= (song-embouchure prev) 1)))
+
+                                ;; Soli nicht am Stueck (ausser Altsax)
+                                (not (and (not (= (song-sax s) 1))
+                                          (not (= (song-sax prev) 1))
+                                          (/= (song-solo s) 0)
+                                          (/= (song-solo prev) 0))))))
                            cluster)))
+               ;; Song zur Liste hinzufuegen
                (when song
                  (push song result)
                  (setf last-inserted song)
@@ -377,49 +391,67 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
           for i from 1
           do (setf (song-position s) i))
 
-    ;; Doppelte entfernen (Sicherheitsmaßnahme)
+    ;; Doppelte entfernen (Sicherheitsmassnahme)
     (remove-duplicates result :key #'song-title :test #'string=)))
 
 
 ;;; Ausgabefunktionen
 (defun print-song-list (songs)
-  (format t "~%~3@A  ~29A  ~10A  ~6A  ~5A  ~5A  ~5A~%" 
-          "Pos" "Titel" "Melodie-Instrumente" "Tonart" "Tempo" "Ansatz" "Sax")
-  (format t "~A~%" (make-string 100 :initial-element #\-))
+  (format t "~%~3@A  ~29A  ~10A  ~6A  ~5A  ~5A  ~5A ~5A~%" 
+          "Pos" "Titel" "Melodie-Instrumente" "Tonart" "Tempo" "Ansatz" "Sax" "Solo")
+  (format t "~A~%" (make-string 90 :initial-element #\-))
   (dolist (s songs)
-    (format t "~3D  ~40A  ~8D  ~6A  ~5D  ~6D  ~3D~%"
+    (format t "~3D  ~40A  ~8D  ~6A  ~5D  ~6D  ~3D ~6D ~%"
             (song-position s)
             (song-title s)
             (song-melody-instruments s)
             (song-key s)
             (song-tempo s)
             (song-embouchure s)
-            (song-sax s))))
+            (song-sax s)
+            (song-solo s))))
 
 (defun export-songs-to-csv (songs filename)
+  ;; Nachbearbeitete Ausgabe
   (with-open-file (stream filename
                           :direction :output
                           :if-exists :supersede
                           :if-does-not-exist :create)
-    ;; Header schreiben
-    (format stream "Position,Titel,Melodie-Instrumente,Tonart,Tempo,Ansatz,Sax~%")
+    ;; Kopfzeile
+    (format stream "Position,Titel,Besetzung,Tempo,Tonart,Kommentar~%")
+
     ;; Songs schreiben
     (dolist (s songs)
-      (format stream "~D,~A,~D,~A,~D,~D,~D~%"
-              (song-position s)
-              (song-title s)
-              (song-melody-instruments s)
-              (song-key s)
-              (song-tempo s)
-              (song-embouchure s)
-              (song-sax s)))))
+      (let* ((melody (song-melody-instruments s))
+             (sax (song-sax s))
+             (solo (song-solo s))
+             (emb (song-embouchure s))
+             (besetzung
+              (cond
+                ((= melody 2)
+                 (if (= sax 1) "Altsax & Posaune" "Tenorsax & Posaune"))
+                ((and (= melody 1) (= solo 1))
+                 (if (= sax 1) "Altsax" "Tenorsax"))
+                ((and (= melody 1) (= solo 2)) "Posaune")
+                (t "Unbekannt")))
+             (kommentar (if (= emb 1) "Ansatz" "")))
+
+        ;; Zeile schreiben
+        (format stream "~D,~A,~A,~D,~A,~A~%"
+                (song-position s)
+                (song-title s)
+                besetzung
+                (song-tempo s)
+                (song-key s)
+                kommentar)))))
+
 
 ;;; Ausfuehrung
 ;; Debug-Schalter
 (defparameter *show-tempo-warnings* nil) ;; nil / t  =  off / on
 
 ;; Auszulesende Datei bereitstellen
-(defparameter *songs* (read-songs-from-csv #P"/Users/rale/Desktop/Musikhochschule/Unterrichtsmaterialien/SPCL/Projektarbeit/Faecherswing-Bsp.csv")) ; <-- HIER PFAD EINFUEGEN
+(defparameter *songs* (read-songs-from-csv #P"/Users/rale/Desktop/Musikhochschule/Unterrichtsmaterialien/SPCL/Projektarbeit/Faecherswing-Bsp+Solo.csv")) ; <-- HIER PFAD EINFUEGEN
 
 ;; Setliste generieren
 (defparameter *final-songs*
@@ -435,8 +467,8 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
 (mapcar #'song-sax *songs*) ; Alle Sax-Nummern
 
 ;; Simple Ausgabe der Setlist
-(print-song-list *final-songs*) ; Gesamte Liste
+(print-song-list *final-songs*) ; <--- HIER EVALUIREN UM GESAMTE LISTE AUSZUGEBEN
 
 ;; CSV Export
-(export-songs-to-csv *final-songs* #P"/Users/rale/Desktop/Musikhochschule/Unterrichtsmaterialien/SPCL/Projektarbeit/Faecherswing-Bsp-Setliste.csv")
-
+(export-songs-to-csv *final-songs* #P"/Users/rale/Desktop/Musikhochschule/Unterrichtsmaterialien/SPCL/Projektarbeit/Faecherswing-Bsp-Setliste.csv") ; <--- HIER PFAD EINFueGEN UND DATEINAME ANGEBEN 
+;; !!! ACHTUNG: GLEICHE DATEINAMEN WERDEN UEBERSCHRIEBEN!!!
