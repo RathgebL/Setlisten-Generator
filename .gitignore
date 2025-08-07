@@ -1,0 +1,24 @@
+# Temporäre und Backup-Dateien
+*~
+*.bak
+*.tmp
+
+# Mac-spezifische Dateien
+.DS_Store
+
+# VS Code-Einstellungen (optional, falls nicht bewusst versioniert)
+.vscode/
+
+# Bytecode-Dateien (falls du sie erzeugst)
+*.fasl
+*.x86f
+*.cfasl
+
+# Logs oder Debug-Dumps (falls vorhanden)
+*.log
+
+# Quicklisp System-Dateien (optional)
+quicklisp/
+
+# Sonstige temporäre Dateien
+*.swp
