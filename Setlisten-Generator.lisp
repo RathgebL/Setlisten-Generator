@@ -95,32 +95,42 @@
 
     ;; Bearbeitung mittlerer Songs
     (labels ((middle-rules (songs)
-               ;; Sortiere so, dass Songs mit Sax = 1 zusammenhängen
-               (let* ((sax-1 (remove-if-not (lambda (s) (= (song-sax s) 1)) songs))
-                      (sax-0 (remove-if     (lambda (s) (= (song-sax s) 1)) songs))
-                      (combined (append sax-0 sax-1))  ; sax-1 am Ende oder Anfang
+           (let* ((sax-1 (remove-if-not (lambda (s) (= (song-sax s) 1)) songs))
+                  (sax-0 (remove-if     (lambda (s) (= (song-sax s) 1)) songs))
+                  (sax-grouped (append sax-0 sax-1))  ; sax=1 zusammenhängend später
+                  (used '())
+                  (result '()))
 
-                      (result (list (first combined))))
-                 (dolist (song (rest combined))
-                   (let* ((last-song (car (last result))) ; Werte des vorherigen Songs
-                          (same-key (string= (song-key song) (song-key last-song))) ; Tonart abgleichen
-                          (emb1? (= (song-embouchure song) 1)) ; Ansatz abgleichen
-                          (emb-prev1? (= (song-embouchure last-song) 1)))
-                     ;; Suche nach Alternativsong
-                     (cond
-                       ((or same-key (and emb1? emb-prev1?))
-                        (let ((alt (find-if (lambda (alt)
-                                              (and (not (member alt result))
-                                                   (not (string= (song-key alt) (song-key last-song)))
-                                                   (not (and (= (song-embouchure alt) 1)
-                                                             (= (song-embouchure last-song) 1)))))
-                                            combined)))
-                          (if alt
-                              (push alt result)
-                              (push song result))))
-                       (t
-                        (push song result)))))
-                 (nreverse result))))
+             ;; Helferfunktion: Regelverletzung prüfen
+             (flet ((violates-rules? (last-song candidate)
+                      (or
+                       ;; gleiche Tonart wie vorher
+                       (string= (song-key last-song) (song-key candidate))
+                       ;; zweimal Embouchure = 1 direkt hintereinander
+                       (and (= (song-embouchure last-song) 1)
+                            (= (song-embouchure candidate) 1)))))
+
+               ;; Hauptschleife: gehe durch, finde jeweils bestmöglichen Song
+               (loop
+                 for i from 1
+                 until (= (length result) (length sax-grouped))
+                 do
+                   (let* ((last-song (car (last result)))
+                          (remaining (remove-if (lambda (s) (member s used)) sax-grouped))
+                          (next-candidate
+                            (if last-song
+                                (or
+                                 ;; bevorzugt: Song, der keine Regel verletzt
+                                 (find-if (lambda (s) (not (violates-rules? last-song s))) remaining)
+                                 ;; oder irgendein übrig gebliebener
+                                 (first remaining))
+                                ;; allererster Song
+                                (first remaining))))
+                     (when next-candidate
+                       (push next-candidate result)
+                       (push next-candidate used)))))
+
+             (nreverse result))))
 
       ;; Finale Songliste zusammenstellen
       (let ((final-order (remove nil
@@ -139,11 +149,11 @@
 
 ;;; Ausgabefunktionen
 (defun print-song-list (songs)
-  (format t "~%~4@A  ~-25A  ~18A  ~8A  ~-5A  ~-5A  ~-5A~%" 
+  (format t "~%~4@A  ~-30A  ~20A  ~8A  ~7A  ~8A  ~5A~%" 
           "Pos" "Titel" "Melodie-Instrumente" "Tonart" "Tempo" "Ansatz" "Sax")
-  (format t "~A~%" (make-string 85 :initial-element #\-))
+  (format t "~A~%" (make-string 100 :initial-element #\-))
   (dolist (s songs)
-    (format t "~4D  ~-25A  ~18D  ~8A  ~-5D  ~5D  ~5D~%"
+    (format t "~4D  ~-30A  ~20D  ~8A  ~7D  ~8D  ~5D~%"
             (song-position s)
             (song-title s)
             (song-melody-instruments s)
@@ -151,6 +161,7 @@
             (song-tempo s)
             (song-embouchure s)
             (song-sax s))))
+
 
 (defun export-songs-to-csv (songs filename)
   (with-open-file (stream filename
@@ -171,7 +182,7 @@
               (song-sax s)))))
 
 ;;; Ausführung
-(defparameter *songs* (read-songs-from-csv #P"/Users/rale/Desktop/Musikhochschule/Unterrichtsmaterialien/SPCL/Projektarbeit/testV3.csv")) ; hier Pfad enfügen
+(defparameter *songs* (read-songs-from-csv #P"/Users/rale/Desktop/Musikhochschule/Unterrichtsmaterialien/SPCL/Projektarbeit/Fächerswing-Bsp.csv")) ; hier Pfad enfügen
 (defparameter *final-songs*
   (arrange-songs-with-full-rules *songs*))
 
