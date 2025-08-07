@@ -198,48 +198,179 @@
 
 ;;; Hauptfunktion
 (defun arrange-songs-with-full-rules (songs &key (embouchure-mode 1))
-  "Sortiere Songs unter Beachtung aller Regeln: Tonart, Embouchure, Sax. Anfang & Ende fix."
+  "Ordnet Songs regelkonform mit rotierender Cluster-Strategie."
   (let* ((sorted-songs (sort (copy-list songs) #'< :key #'song-position))
          (first-song (first sorted-songs))
          (last-song (car (last sorted-songs)))
-         (middle-songs (remove first-song (remove last-song sorted-songs))))
+         (middle-songs (remove first-song (remove last-song sorted-songs)))
 
-    ;; Cluster nach Tempo definieren
-    (let* ((clusters (list
-                      (remove-if-not (lambda (s) (< (song-tempo s) 100)) middle-songs)
-                      (remove-if-not (lambda (s) (and (>= (song-tempo s) 100) (< (song-tempo s) 140))) middle-songs)
-                      (remove-if-not (lambda (s) (and (>= (song-tempo s) 140) (< (song-tempo s) 180))) middle-songs)
-                      (remove-if-not (lambda (s) (and (>= (song-tempo s) 180) (< (song-tempo s) 220))) middle-songs)
-                      (remove-if-not (lambda (s) (>= (song-tempo s) 220)) middle-songs)))
-           (flattened-clusters '()))
+         ;; Zweiter Song
+         (second-candidate
+          (find-if (lambda (s)
+                     (and (not (string= (song-key s) (song-key first-song)))
+                          (= (song-melody-instruments s) 2)
+                          (and (> (song-tempo s) 120) (<= (song-tempo s) 140))))
+                   middle-songs))
 
-      ;; Lokale Optimierung pro Cluster
-      (dolist (cluster clusters)
-        (let ((opt-cluster (remove nil (optimize-cluster cluster))))
-          (setf flattened-clusters (append flattened-clusters opt-cluster))))
+         (remaining-after-second
+          (if second-candidate
+              (remove second-candidate middle-songs :count 1)
+              middle-songs))
 
-      ;; Songliste zusammenbauen
-      (let ((final-order
-             (remove nil
-                     (append (list first-song)
-                             flattened-clusters
-                             (list last-song)))))
+         ;; Tempo des 2. Songs merken
+         (tempo-second (when second-candidate (song-tempo second-candidate)))
 
-        ;; Positionen setzen
-        (loop for s in final-order
-              for i from 1
-              do (setf (song-position s) i))
+         ;; Dritter Song
+         (third-candidate
+          (find-if (lambda (s)
+                     (and (not (string= (song-key s) (song-key first-song)))
+                          (= (song-melody-instruments s) 2)
+                          (and (> (song-tempo s) 140) (<= (song-tempo s) 160))))
+                   middle-songs))
 
-        ;; Tempo-Check
-        (loop for (s1 s2) on final-order while s2
-              do (let ((t1 (song-tempo s1))
-                       (t2 (song-tempo s2)))
-                   (unless (tempo-compatible-p t1 t2)
-                     (format t "~%WARNUNG: Tempo-Regel verletzt zwischen ~A (~A) und ~A (~A)~%"
-                             (song-title s1) t1
-                             (song-title s2) t2))))
+         (remaining-after-third
+          (if third-candidate
+              (remove third-candidate middle-songs :count 1)
+            middle-songs))
 
-        final-order))))
+         ;; Vorletzter Song
+         (tempo-last (song-tempo last-song))
+         (penultimate-candidate
+          (find-if (lambda (s)
+                     (let ((tempo (song-tempo s)))
+                       (and (not (string= (song-key s) (song-key last-song)))
+                            (>= tempo (- tempo-last 30))
+                            (<= tempo (- tempo-last 10))
+                            (= (song-melody-instruments s) 2))))
+                   remaining-after-second))
+
+         ;; Mittlere Songs
+         (middle-candidates
+          (if penultimate-candidate
+              (remove penultimate-candidate remaining-after-second :count 1)
+            remaining-after-second))
+
+         ;; Alt-Sax-Songs extrahieren und mischen
+         (sax-songs
+          (shuffle-list
+           (remove-if-not (lambda (s) (= (song-sax s) 1)) middle-candidates)))
+
+         ;; Alt-Sax-Songs aus den mittleren Songs entfernen
+         (middle-candidates
+          (remove-if (lambda (s) (member s sax-songs)) middle-candidates))
+
+         ;; Cluster definieren 
+         ;; Cluster 1:    0-100     (langsam)
+         ;; Cluster 2:  101-130     (moderat)
+         ;; Cluster 3:  131-160     (mittel-schnell)
+         ;; Cluster 4:  161-190     (schnell)
+         ;; Cluster 5:  191-220     (sehr schnell)
+         ;; Cluster 6:   221+       (extrem schnell)
+         ;; + Songs in jedem Cluster für Varianz mischen
+         (clusters (list
+                    (shuffle-list
+                     (remove-if-not (lambda (s)
+                                      (<= (song-tempo s) 100))
+                                    middle-candidates))
+                    (shuffle-list
+                     (remove-if-not (lambda (s)
+                                      (and (> (song-tempo s) 100)
+                                           (<= (song-tempo s) 130)))
+                                    middle-candidates))
+                    (shuffle-list
+                     (remove-if-not (lambda (s)
+                                      (and (> (song-tempo s) 130)
+                                           (<= (song-tempo s) 160)))
+                                    middle-candidates))
+                    (shuffle-list
+                     (remove-if-not (lambda (s)
+                                      (and (> (song-tempo s) 160)
+                                           (<= (song-tempo s) 190)))
+                                    middle-candidates))
+                    (shuffle-list
+                     (remove-if-not (lambda (s)
+                                      (and (> (song-tempo s) 190)
+                                           (<= (song-tempo s) 220)))
+                                    middle-candidates))
+                    (shuffle-list
+                     (remove-if-not (lambda (s)
+                                      (> (song-tempo s) 220))
+                                    middle-candidates))))
+         (cluster-count (length clusters))
+         (cluster-index 3) ; Start bei Cluster 4: 161-190
+         (result (list))
+         (last-inserted nil))
+
+    ;; Erstes Element
+    (push first-song result)
+    (setf last-inserted first-song)
+
+    ;; Zweites Element
+    (when second-candidate
+      (push second-candidate result)
+      (setf last-inserted second-candidate))
+
+    ;; Zirkelrotation
+    (loop while (some #'identity clusters)
+          do (let* ((cluster (nth cluster-index clusters))
+                    (song (find-if
+                           (lambda (s)
+                             (let ((prev last-inserted))
+                               (and (not (string= (song-key s) (song-key prev)))
+                                    (not (and (= (song-embouchure s) 1)
+                                              (= (song-embouchure prev) 1))))))
+                           cluster)))
+               (when song
+                 (push song result)
+                 (setf last-inserted song)
+                 (setf (nth cluster-index clusters)
+                       (remove song cluster :count 1))))
+          (setf cluster-index (mod (1+ cluster-index) cluster-count)))
+
+    ;; Alt-Sax-Songs einfügen
+    (when sax-songs
+      (let* ((sax-sorted (optimize-cluster sax-songs))
+             (mid (+ 2 (random 4))))
+        (setf result
+              (append (subseq result 0 (min mid (length result)))
+                      sax-sorted
+                      (subseq result (min mid (length result)))))))
+
+    ;; Vorletzter Song
+    (when penultimate-candidate
+      (push penultimate-candidate result))
+
+    ;; Letzter Song
+    (push last-song result)
+
+    ;; Reihenfolge umkehren (da push verwendet)
+    (setf result (nreverse result))
+
+    ;; Tempo-Regel prüfen
+    (loop for (s1 s2) on result while s2
+          do (let ((t1 (song-tempo s1))
+                   (t2 (song-tempo s2)))
+               (unless (tempo-compatible-p t1 t2)
+                 (format t "~%WARNUNG: Tempo-Regel verletzt zwischen ~A (~A) und ~A (~A)~%"
+                         (song-title s1) t1 (song-title s2) t2))))
+
+    ;; Fehlende Songs ergänzen (zur Sicherheit)
+    (let* ((result-titles (mapcar #'song-title result))
+           (missing (remove-if (lambda (s)
+                                 (member (song-title s) result-titles :test #'string=))
+                               songs)))
+      (when missing
+        (format t "~%WARNUNG: Songs ergänzt: ~a~%" (mapcar #'song-title missing))
+        (dolist (s missing)
+          (setf result (insert-song-with-rules s result)))))
+
+    ;; Positionen setzen
+    (loop for s in result
+          for i from 1
+          do (setf (song-position s) i))
+
+    ;; Doppelte entfernen (Sicherheitsmaßnahme)
+    (remove-duplicates result :key #'song-title :test #'string=)))
 
 
 ;;; Ausgabefunktionen
