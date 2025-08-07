@@ -1,14 +1,23 @@
 ;;;; ----- SETLISTEN GENERATOR -----
 
-;;; Beschreibung
+;;; Beschreibung:
+;; Bibliothek "Quicklisp" notwendig. Download unter https://www.quicklisp.org
+;; Lade quicklisp wie auf der Webseite beschrieben
+;; Pfad zur CSV-Datei eingeben
+;; Pfad für CSV-Export eingeben
+;; Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalten
 
-;;; Regeln
-#|  
-- Erster und letzter Song bleiben an ihrer vorgegeben Positionen
-- Song an Position 2: =/= Tonart wie erster Song, Tempo < 150 und 2 Melodieinstrumente
-- Vorletzter Song: Tempo 10-30 weniger als letzter Song und =/= Tonart wie letzter Song
-- Mittlere Songs: Songs mit Sax-Wert = 1 zusammen, keine gleichen Tonarten und Ansatzwert = 1 hintereinander
-|#
+;;; Regeln:
+;; Erster und letzter Song: behalten ihrere vorgegeben Positionen
+;; Zweiter Song: =/= Tonart wie erster Song, Tempo 121-140 und 2 Melodieinstrumente
+;; Dritter Song: =/= Tonart wie zweiter Song, Tempo 141-160 und 2 Melodieinstrumente
+;; Mittlere Songs: Songs in Tempo-Clustern sortiert
+;;                 Zirkulation durch die verschiedenen Cluster
+;;                 Songs mit Sax-Wert = 1 zusammen und mittig
+;;                 Ansatzwert = 1 nicht hintereinander
+;;                 optimaler Weise keinen gleichen Tonarten hintereinander 
+;; Vorletzter Song: =/= Tonart wie letzter Song, Tempo 10-30 weniger als letzter Song und 2 Melodieinstrumente
+
 
 ;;; Packete laden
 (load (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname)))
@@ -50,11 +59,6 @@
                           (format t "Fehler beim Verarbeiten von Zeile: ~a~%Fehler: ~a~%" row e)
                           nil)))
                     rows))))
-
-(defun hash-table-keys (table)
-  (let (keys)
-    (maphash (lambda (k v) (push k keys)) table)
-    keys))
 
 (defun shuffle-list (lst)
   "Gibt eine zufällig permutierte Kopie der Liste LST zurück."
@@ -217,9 +221,6 @@
               (remove second-candidate middle-songs :count 1)
               middle-songs))
 
-         ;; Tempo des 2. Songs merken
-         (tempo-second (when second-candidate (song-tempo second-candidate)))
-
          ;; Dritter Song
          (third-candidate
           (find-if (lambda (s)
@@ -375,11 +376,11 @@
 
 ;;; Ausgabefunktionen
 (defun print-song-list (songs)
-  (format t "~%~3@A  ~30A  ~10A  ~7A  ~7A  ~7A  ~5A~%" 
+  (format t "~%~3@A  ~29A  ~10A  ~6A  ~5A  ~5A  ~5A~%" 
           "Pos" "Titel" "Melodie-Instrumente" "Tonart" "Tempo" "Ansatz" "Sax")
   (format t "~A~%" (make-string 100 :initial-element #\-))
   (dolist (s songs)
-    (format t "~3D  ~40A  ~8D  ~7A  ~7D  ~7D  ~5D~%"
+    (format t "~3D  ~40A  ~8D  ~6A  ~5D  ~6D  ~3D~%"
             (song-position s)
             (song-title s)
             (song-melody-instruments s)
@@ -408,7 +409,7 @@
               (song-sax s)))))
 
 ;;; Ausführung
-(defparameter *songs* (read-songs-from-csv #P"/Users/rale/Desktop/Musikhochschule/Unterrichtsmaterialien/SPCL/Projektarbeit/Fächerswing-Bsp.csv")) ; hier Pfad enfügen
+(defparameter *songs* (read-songs-from-csv #P"/Users/rale/Desktop/Musikhochschule/Unterrichtsmaterialien/SPCL/Projektarbeit/Faecherswing-Bsp.csv")) ; hier Pfad enfügen
 (defparameter *final-songs*
   (arrange-songs-with-full-rules *songs*))
 
