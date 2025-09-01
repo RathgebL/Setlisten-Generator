@@ -38,15 +38,6 @@ Blue Skies,1,140,Bb,1,0,1,0
 ### Voraussetzungen
 
 - [SBCL](http://www.sbcl.org/), [LispWorks](https://www.lispworks.com) oder eine andere Common Lisp-Umgebung
-- [Quicklisp](https://www.quicklisp.org/beta/) installiert
-
-### Setup
-
-```lisp
-(load (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname)))
-(ql:quickload :cl-csv)
-(ql:quickload :split-sequence)
-```
 
 ## Ausführung
 
