@@ -1,6 +1,6 @@
 ;;;; ----- SETLISTEN GENERATOR -----
 
-;; Version: v1.0 (Stand: 2025-08-07)
+;; Version: v1.1 (Stand: 2025-09-01)
 
 #|
 
@@ -20,19 +20,11 @@ Mittlere Songs: Songs in Tempo-Clustern sortiert
 Vorletzter Song: =/= Tonart wie letzter Song, Tempo 10-30 weniger als letzter Song und 2 Melodieinstrumente
 
 Nutzung:
-Bibliothek "Quicklisp" notwendig. Download unter https://www.quicklisp.org
-Lade quicklisp wie auf der Webseite beschrieben
 Pfad zur CSV-Datei eingeben
 Pfad fuer CSV-Export eingeben
 Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalten
 
 |#
-
-;;; Packete laden
-(load (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname)))
-(ql:quickload :cl-csv)
-(ql:quickload :split-sequence)
-
 
 ;;; Hilfsfunktionen
 (defstruct song
@@ -45,12 +37,44 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
   solo
   position)
 
-(defun parse-instruments (field)
-  ;; Gegen fehlerhafte Eingaben
-  (parse-integer field :junk-allowed t))
+(defun safe-parse-integer (s)
+  (and s (plusp (length s)) (parse-integer s :junk-allowed t)))
+
+(defun parse-csv-line (line &key (separator #\,))
+  (let ((out '())
+        (field (make-string-output-stream))
+        (in-quote nil)
+        (i 0)
+        (n (length line)))
+    (labels ((emit ()
+               (push (get-output-stream-string field) out)
+               (setf field (make-string-output-stream))))
+      (loop while (< i n) do
+            (let ((ch (char line i)))
+              (cond
+                ((char= ch #\")
+                 (if in-quote
+                     (if (and (< (1+ i) n)
+                              (char= (char line (1+ i)) #\"))
+                         (progn (incf i) (write-char #\" field)) ; \"\" -> "
+                         (setf in-quote nil))
+                     (setf in-quote t)))
+                ((and (not in-quote) (char= ch separator))
+                 (emit))
+                (t
+                 (write-char ch field))))
+            (incf i))
+      (emit)
+      (nreverse out))))
+
+(defun read-csv-file (pathname &key (separator #\,))
+  (with-open-file (in pathname :direction :input)
+    (loop for line = (read-line in nil nil)
+          while line
+          collect (parse-csv-line line :separator separator))))
 
 (defun read-songs-from-csv (filename)
-  (let* ((all-rows (cl-csv:read-csv filename))
+  (let* ((all-rows (read-csv-file filename)) ; Einlesen mit neuer Helferfunktion
          (rows (cdr all-rows))) ; entfernt die Ueberschrift
     (remove nil
             (mapcar (lambda (row)
@@ -59,13 +83,13 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
                           (destructuring-bind (title melody-count tempo key embouchure sax solo position) row
                             (make-song
                              :title title
-                             :melody-instruments (parse-integer melody-count)
-                             :tempo (parse-integer tempo)
+                             :melody-instruments (safe-parse-integer melody-count)
+                             :tempo (safe-parse-integer tempo)
                              :key key
-                             :embouchure (parse-integer embouchure)
-                             :sax (parse-integer sax)
-                             :solo (parse-integer solo)
-                             :position (parse-integer position)))
+                             :embouchure (safe-parse-integer embouchure)
+                             :sax (safe-parse-integer sax)
+                             :solo (safe-parse-integer solo)
+                             :position (safe-parse-integer position)))
                         (error (e)
                           (format t "Fehler beim Verarbeiten von Zeile: ~a~%Fehler: ~a~%" row e)
                           nil)))
@@ -470,5 +494,5 @@ Lade alle funktionen und Ausgabe der algorithmisch generiereten Setliste erhalte
 (print-song-list *final-songs*) ; <--- HIER EVALUIREN UM GESAMTE LISTE AUSZUGEBEN
 
 ;; CSV Export
-(export-songs-to-csv *final-songs* #P"/Users/rale/Desktop/Musikhochschule/Unterrichtsmaterialien/SPCL/Projektarbeit/Faecherswing-Bsp-Setliste.csv") ; <--- HIER PFAD EINFueGEN UND DATEINAME ANGEBEN 
+(export-songs-to-csv *final-songs* #P"/Users/rale/Desktop/Musikhochschule/Unterrichtsmaterialien/SPCL/Projektarbeit/Faecherswing-Bsp-Setliste.csv") ; <--- HIER PFAD EINFUEGEN UND DATEINAME ANGEBEN 
 ;; !!! ACHTUNG: GLEICHE DATEINAMEN WERDEN UEBERSCHRIEBEN!!!
